@@ -49,8 +49,14 @@ int main(int argc, char* argv[]) {
 
 
 	util::Array1D<SizeT, ValueT> SP;
+	util::Array1D<SizeT, VertexT> Labels;
+
+
 	SP.Allocate(graph.nodes, util::DEVICE);
 	SP.Allocate(graph.nodes, util::HOST);
+	
+	Labels.Allocate(graph.nodes, util::DEVICE);
+	
 	cudaDeviceSynchronize();
 
 	SP.ForEach(
@@ -62,6 +68,13 @@ int main(int argc, char* argv[]) {
 			v = 0;
 		}, 1, util::DEVICE, 0);
 		
+
+	Labels.ForEach(
+		[] __device__(VertexT &v) {
+			v = 0;
+		}, graph.nodes, util::DEVICE, 0);
+
+
 
 	
 	typedef typename app::Frontier<VertexT, SizeT, util::ARRAY_NONE, 0> FrontierT;
@@ -111,6 +124,8 @@ int main(int argc, char* argv[]) {
 
 	oprtr_parameters.advance_mode = "LB_CULL";
 
+	oprtr_parameters.filter_mode = "CULL";
+
 	auto advance_op = [SP, weights] __device__ (const VertexT &src, VertexT &dest, const SizeT &edge_id,
             const VertexT &input_item, const SizeT &input_pos,
             SizeT &output_pos) -> bool {
@@ -130,23 +145,43 @@ int main(int argc, char* argv[]) {
 		
 	};
 
-	auto filter_op = [] __device__ (const VertexT &src, VertexT &dest, const SizeT &edge_id,
+	
+
+	VertexT iteration = 1;
+
+
+	auto filter_op = [iteration, Labels] __device__ (const VertexT &src, VertexT &dest, const SizeT &edge_id,
             const VertexT &input_item, const SizeT &input_pos,
             SizeT &output_pos) -> bool {
+			
+		if (!util::isValid(dest)) return false;
+		if (Labels[dest] == iteration) return false;
+		Labels[dest] = iteration;
 		return true;
 	};	
+
+
 
 
 	while(frontier.queue_length){
 		oprtr::Advance<oprtr::OprtrType_V2V>(
 		    graph.csr(), frontier.V_Q(), frontier.Next_V_Q(),
 		    oprtr_parameters, advance_op, filter_op);
+
+		iteration ++;
+	
+		/*oprtr::Filter<oprtr::OprtrType_V2V>(
+			graph.csr(), frontier.V_Q(), frontier.Next_V_Q(), 
+			oprtr_parameters, filter_op);
+		*/
 		frontier.GetQueueLength(0);
+		std::cout << frontier.queue_length << std::endl;
 	}
 
 	SP.Move(util::DEVICE, util::HOST, graph.nodes, 0, 0);
-	
-	std::cout << frontier.queue_length << std::endl;
+
+	std:: cout << "DONE\n";
+		
 
 	
 	for (int i = 0; i < graph.nodes; i++) 
